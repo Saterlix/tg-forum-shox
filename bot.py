@@ -57,6 +57,11 @@ FUTURE_CHANNEL_BUTTONS = parse_str_list(env_value("FUTURE_CHANNEL_BUTTONS", ""))
 DB_PATH = BASE_DIR / env_value("DB_PATH", "bot.sqlite3")
 POLL_TIMEOUT = int(env_value("POLL_TIMEOUT", "35"))
 PORT = int(env_value("PORT", "10000"))
+GITHUB_DATA_TOKEN = env_value("GITHUB_DATA_TOKEN", "")
+GITHUB_DATA_REPO = env_value("GITHUB_DATA_REPO", "")
+GITHUB_DATA_FILE = env_value("GITHUB_DATA_FILE", "users.json")
+BLOB_READ_WRITE_TOKEN = env_value("BLOB_READ_WRITE_TOKEN", "")
+BLOB_USERS_FILE = env_value("BLOB_USERS_FILE", "users.json")
 
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN is missing in .env")
@@ -144,6 +149,186 @@ class TelegramApi:
 
 
 api = TelegramApi()
+
+
+class GithubUserStore:
+    def __init__(self, token: str, repo: str, file_path: str):
+        self.enabled = bool(token and repo and file_path)
+        self.token = token
+        self.repo = repo
+        self.file_path = file_path
+        self.api_url = f"https://api.github.com/repos/{repo}/contents/{urllib.parse.quote(file_path)}"
+
+    def request(self, method: str, payload: dict | None = None) -> dict | None:
+        if not self.enabled:
+            return None
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.api_url,
+            data=data,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            print(f"GitHub data store error: HTTP {exc.code}: {exc.read().decode('utf-8', errors='replace')}")
+            return None
+        except Exception as exc:
+            print(f"GitHub data store error: {exc}")
+            return None
+
+    def load(self) -> tuple[dict, str | None]:
+        response = self.request("GET")
+        if not response:
+            return {"users": {}}, None
+        try:
+            import base64
+
+            raw = base64.b64decode(response.get("content", "")).decode("utf-8")
+            data = json.loads(raw) if raw.strip() else {"users": {}}
+            if "users" not in data:
+                data["users"] = {}
+            return data, response.get("sha")
+        except Exception as exc:
+            print(f"GitHub data parse error: {exc}")
+            return {"users": {}}, response.get("sha")
+
+    def save(self, data: dict, sha: str | None) -> None:
+        if not self.enabled:
+            return
+        import base64
+
+        payload = {
+            "message": "Update bot users",
+            "content": base64.b64encode(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")).decode("ascii"),
+        }
+        if sha:
+            payload["sha"] = sha
+        self.request("PUT", payload)
+
+    def upsert_user(self, user: UserInfo, started: bool = False) -> None:
+        if not self.enabled:
+            return
+        data, sha = self.load()
+        users = data.setdefault("users", {})
+        current = users.get(str(user.chat_id), {})
+        users[str(user.chat_id)] = {
+            **current,
+            "chat_id": user.chat_id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone": user.phone or current.get("phone", ""),
+            "started": bool(started or current.get("started")),
+            "last_seen": int(time.time()),
+        }
+        self.save(data, sha)
+
+    def all_user_ids(self) -> list[int]:
+        if not self.enabled:
+            return []
+        data, _ = self.load()
+        result: list[int] = []
+        for chat_id, item in data.get("users", {}).items():
+            try:
+                value = int(item.get("chat_id", chat_id) if isinstance(item, dict) else chat_id)
+            except (TypeError, ValueError):
+                continue
+            if value not in SUPER_ADMINS:
+                result.append(value)
+        return sorted(set(result))
+
+
+github_store = GithubUserStore(GITHUB_DATA_TOKEN, GITHUB_DATA_REPO, GITHUB_DATA_FILE)
+
+
+class BlobUserStore:
+    def __init__(self, token: str, file_path: str):
+        self.enabled = bool(token and file_path)
+        self.token = token
+        self.file_path = file_path
+
+    def client(self):
+        from vercel.blob import BlobClient
+
+        return BlobClient(token=self.token)
+
+    def load(self) -> dict:
+        if not self.enabled:
+            return {"users": {}}
+        try:
+            result = self.client().get(self.file_path, access="private")
+            if result is None or result.status_code != 200 or result.stream is None:
+                return {"users": {}}
+            raw = b"".join(result.stream).decode("utf-8")
+            data = json.loads(raw) if raw.strip() else {"users": {}}
+            if "users" not in data:
+                data["users"] = {}
+            return data
+        except Exception as exc:
+            message = str(exc).lower()
+            if "not found" not in message and "blobnotfound" not in message:
+                print(f"Vercel Blob load error: {exc}")
+            return {"users": {}}
+
+    def save(self, data: dict) -> None:
+        if not self.enabled:
+            return
+        try:
+            self.client().put(
+                self.file_path,
+                json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
+                access="private",
+                content_type="application/json",
+                add_random_suffix=False,
+                overwrite=True,
+            )
+        except Exception as exc:
+            print(f"Vercel Blob save error: {exc}")
+
+    def upsert_user(self, user: UserInfo, started: bool = False) -> None:
+        if not self.enabled:
+            return
+        data = self.load()
+        users = data.setdefault("users", {})
+        current = users.get(str(user.chat_id), {})
+        users[str(user.chat_id)] = {
+            **current,
+            "chat_id": user.chat_id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone": user.phone or current.get("phone", ""),
+            "started": bool(started or current.get("started")),
+            "last_seen": int(time.time()),
+        }
+        self.save(data)
+
+    def all_user_ids(self) -> list[int]:
+        if not self.enabled:
+            return []
+        data = self.load()
+        result: list[int] = []
+        for chat_id, item in data.get("users", {}).items():
+            try:
+                value = int(item.get("chat_id", chat_id) if isinstance(item, dict) else chat_id)
+            except (TypeError, ValueError):
+                continue
+            if value not in SUPER_ADMINS:
+                result.append(value)
+        return sorted(set(result))
+
+
+blob_store = BlobUserStore(BLOB_READ_WRITE_TOKEN, BLOB_USERS_FILE)
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -287,6 +472,8 @@ class Storage:
             ),
         )
         self.conn.commit()
+        blob_store.upsert_user(user, started=started)
+        github_store.upsert_user(user, started=started)
 
     def save_owner_mapping(self, owner_chat_id: int, owner_message_id: int, user_chat_id: int, user_message_id: int) -> None:
         self.conn.execute(
@@ -403,7 +590,11 @@ class Storage:
             f"SELECT chat_id FROM users WHERE chat_id NOT IN ({placeholders(SUPER_ADMINS)}) ORDER BY first_seen",
             tuple(SUPER_ADMINS),
         ).fetchall() if SUPER_ADMINS else self.conn.execute("SELECT chat_id FROM users ORDER BY first_seen").fetchall()
-        return [int(row["chat_id"]) for row in rows]
+        ids = {int(row["chat_id"]) for row in rows}
+        ids.update(blob_store.all_user_ids())
+        ids.update(github_store.all_user_ids())
+        ids.difference_update(SUPER_ADMINS)
+        return sorted(ids)
 
     def set_state(self, chat_id: int, state: str, payload: str = "") -> None:
         self.conn.execute(
@@ -539,7 +730,10 @@ def send_stats(chat_id: int) -> None:
 def send_to_all_users(source_chat_id: int, message_id: int, repeat: int = 1) -> tuple[int, int]:
     sent = 0
     failed = 0
-    for user_id in db.all_user_ids():
+    recipients = db.all_user_ids()
+    if not recipients:
+        return sent, failed
+    for user_id in recipients:
         if db.is_blocked(user_id):
             continue
         for _ in range(repeat):

@@ -1,1 +1,1 @@
-# No external packages are required. The bot uses only Python standard library.
+vercel>=0.5.4
