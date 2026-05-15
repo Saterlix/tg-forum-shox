@@ -18,6 +18,16 @@ python bot.py
 
 В облаке нужно задать переменную `BOT_TOKEN` вручную, чтобы токен не попадал в репозиторий.
 
+## Vercel webhook
+
+Для Vercel бот работает через `/api/webhook`.
+
+После деплоя нужно задать webhook:
+
+```text
+https://api.telegram.org/bot<token>/setWebhook?url=https://<vercel-domain>/api/webhook&secret_token=<WEBHOOK_SECRET>
+```
+
 ## Важно по каналам
 
 Для проверки подписки бот должен быть добавлен в канал/группу, которая указана в `REQUIRED_CHANNELS`.
