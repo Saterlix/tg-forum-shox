@@ -1,8 +1,8 @@
 services:
-  - type: worker
+  - type: web
     name: tg-forum-shox
     runtime: docker
-    plan: starter
+    plan: free
     autoDeploy: true
     envVars:
       - key: BOT_TOKEN
@@ -18,10 +18,6 @@ services:
       - key: FUTURE_CHANNEL_BUTTONS
         value: ""
       - key: DB_PATH
-        value: "/data/bot.sqlite3"
+        value: "/tmp/bot.sqlite3"
       - key: POLL_TIMEOUT
         value: "35"
-    disk:
-      name: bot-data
-      mountPath: /data
-      sizeGB: 1

@@ -1,12 +1,14 @@
 import json
 import os
 import sqlite3
+import threading
 import time
 import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
@@ -54,6 +56,7 @@ CHANNEL_LINKS = parse_str_list(env_value("CHANNEL_LINKS", ""))
 FUTURE_CHANNEL_BUTTONS = parse_str_list(env_value("FUTURE_CHANNEL_BUTTONS", ""))
 DB_PATH = BASE_DIR / env_value("DB_PATH", "bot.sqlite3")
 POLL_TIMEOUT = int(env_value("POLL_TIMEOUT", "35"))
+PORT = int(env_value("PORT", "10000"))
 
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN is missing in .env")
@@ -141,6 +144,46 @@ class TelegramApi:
 
 
 api = TelegramApi()
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = b"ok"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args) -> None:
+        return
+
+
+def start_health_server() -> None:
+    def run() -> None:
+        server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+        server.serve_forever()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+
+def start_keep_alive() -> None:
+    host = env_value("RENDER_EXTERNAL_HOSTNAME", "")
+    if not host:
+        return
+    url = f"https://{host}/"
+
+    def run() -> None:
+        while True:
+            time.sleep(600)
+            try:
+                urllib.request.urlopen(url, timeout=20).read()
+            except Exception as exc:
+                print(f"Keep-alive ping failed: {exc}")
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
 
 
 class Storage:
@@ -726,6 +769,8 @@ def handle_message(update: dict) -> None:
 
 
 def main() -> None:
+    start_health_server()
+    start_keep_alive()
     print("Bot started. Press Ctrl+C to stop.")
     offset: int | None = None
     while True:
