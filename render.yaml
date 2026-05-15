@@ -1,0 +1,27 @@
+services:
+  - type: worker
+    name: tg-forum-shox
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_CHAT_ID
+        value: "1913672206"
+      - key: SUPER_ADMINS
+        value: "1913672206,7165323599"
+      - key: REQUIRED_CHANNELS
+        value: "@ChsvFamq,@BlackRussia_Forum"
+      - key: CHANNEL_LINKS
+        value: "https://t.me/ChsvFamq,https://t.me/BlackRussia_Forum"
+      - key: FUTURE_CHANNEL_BUTTONS
+        value: ""
+      - key: DB_PATH
+        value: "/data/bot.sqlite3"
+      - key: POLL_TIMEOUT
+        value: "35"
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 1

@@ -1,0 +1,8 @@
+.env
+bot.sqlite3
+*.sqlite3
+*.db
+__pycache__/
+*.pyc
+logs/
+.git/
