@@ -731,12 +731,12 @@ def send_stats(chat_id: int) -> None:
     api.send_message(chat_id, text)
 
 
-def send_to_all_users(source_chat_id: int, message_id: int, repeat: int = 1) -> tuple[int, int]:
+def send_to_all_users(source_chat_id: int, message_id: int, repeat: int = 1) -> tuple[int, int, int]:
     sent = 0
     failed = 0
     recipients = db.all_user_ids()
     if not recipients:
-        return sent, failed
+        return sent, failed, 0
     for user_id in recipients:
         if db.is_blocked(user_id):
             continue
@@ -748,7 +748,7 @@ def send_to_all_users(source_chat_id: int, message_id: int, repeat: int = 1) -> 
             except Exception:
                 failed += 1
                 time.sleep(0.15)
-    return sent, failed
+    return sent, failed, len(recipients)
 
 
 def command_name(text: str) -> str:
@@ -770,8 +770,11 @@ def handle_direct_admin_command(message: dict, admin_id: int, text: str, is_supe
         return True
 
     if command == "/post":
-        sent, failed = send_to_all_users(admin_id, reply["message_id"], repeat=1)
-        api.send_message(admin_id, f"Пост отправлен. Успешно: {sent}, ошибок: {failed}.")
+        sent, failed, recipients = send_to_all_users(admin_id, reply["message_id"], repeat=1)
+        if recipients == 0:
+            api.send_message(admin_id, "Пост не отправлен: получателей 0. Нужно, чтобы пользователи нажали /start.")
+        else:
+            api.send_message(admin_id, f"Пост отправлен. Получателей: {recipients}. Успешно: {sent}, ошибок: {failed}.")
         return True
 
     parts = text.strip().split()
@@ -793,8 +796,11 @@ def handle_direct_admin_command(message: dict, admin_id: int, text: str, is_supe
         repeat = 20
         api.send_message(admin_id, "Для обычных админов лимит 20 повторов. Запускаю 20.")
 
-    sent, failed = send_to_all_users(admin_id, reply["message_id"], repeat=repeat)
-    api.send_message(admin_id, f"Рассылка завершена. Успешно: {sent}, ошибок: {failed}. Повторов: {repeat}.")
+    sent, failed, recipients = send_to_all_users(admin_id, reply["message_id"], repeat=repeat)
+    if recipients == 0:
+        api.send_message(admin_id, "Рассылка не отправлена: получателей 0. Нужно, чтобы пользователи нажали /start.")
+    else:
+        api.send_message(admin_id, f"Рассылка завершена. Получателей: {recipients}. Успешно: {sent}, ошибок: {failed}. Повторов: {repeat}.")
     return True
 
 
@@ -907,8 +913,8 @@ def handle_admin_state(message: dict, admin_id: int, text: str) -> bool:
         if not text.strip():
             api.send_message(admin_id, "Для новости нужен заголовок. Отправьте текст или сообщение с подписью.")
             return True
-        sent, failed = send_to_all_users(admin_id, message["message_id"], repeat=1)
-        api.send_message(admin_id, f"Новость отправлена. Успешно: {sent}, ошибок: {failed}.")
+        sent, failed, recipients = send_to_all_users(admin_id, message["message_id"], repeat=1)
+        api.send_message(admin_id, f"Новость отправлена. Получателей: {recipients}. Успешно: {sent}, ошибок: {failed}.")
         db.clear_state(admin_id)
         return True
 
@@ -928,8 +934,8 @@ def handle_admin_state(message: dict, admin_id: int, text: str) -> bool:
 
     if state == "broadcast_message":
         repeat = int(payload or "1")
-        sent, failed = send_to_all_users(admin_id, message["message_id"], repeat=repeat)
-        api.send_message(admin_id, f"Рассылка завершена. Успешно: {sent}, ошибок: {failed}. Повторов: {repeat}.")
+        sent, failed, recipients = send_to_all_users(admin_id, message["message_id"], repeat=repeat)
+        api.send_message(admin_id, f"Рассылка завершена. Получателей: {recipients}. Успешно: {sent}, ошибок: {failed}. Повторов: {repeat}.")
         db.clear_state(admin_id)
         return True
 
