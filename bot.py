@@ -243,8 +243,7 @@ class GithubUserStore:
                 value = int(item.get("chat_id", chat_id) if isinstance(item, dict) else chat_id)
             except (TypeError, ValueError):
                 continue
-            if value not in SUPER_ADMINS:
-                result.append(value)
+            result.append(value)
         return sorted(set(result))
 
 
@@ -323,8 +322,7 @@ class BlobUserStore:
                 value = int(item.get("chat_id", chat_id) if isinstance(item, dict) else chat_id)
             except (TypeError, ValueError):
                 continue
-            if value not in SUPER_ADMINS:
-                result.append(value)
+            result.append(value)
         return sorted(set(result))
 
 
@@ -591,13 +589,11 @@ class Storage:
 
     def all_user_ids(self) -> list[int]:
         rows = self.conn.execute(
-            f"SELECT chat_id FROM users WHERE chat_id NOT IN ({placeholders(SUPER_ADMINS)}) ORDER BY first_seen",
-            tuple(SUPER_ADMINS),
-        ).fetchall() if SUPER_ADMINS else self.conn.execute("SELECT chat_id FROM users ORDER BY first_seen").fetchall()
+            "SELECT chat_id FROM users ORDER BY first_seen"
+        ).fetchall()
         ids = {int(row["chat_id"]) for row in rows}
         ids.update(blob_store.all_user_ids())
         ids.update(github_store.all_user_ids())
-        ids.difference_update(SUPER_ADMINS)
         return sorted(ids)
 
     def set_state(self, chat_id: int, state: str, payload: str = "") -> None:
