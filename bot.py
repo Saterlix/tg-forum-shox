@@ -553,6 +553,53 @@ def send_to_all_users(source_chat_id: int, message_id: int, repeat: int = 1) -> 
     return sent, failed
 
 
+def command_name(text: str) -> str:
+    first = (text.strip().split() or [""])[0].lower()
+    return first.split("@", 1)[0]
+
+
+def handle_direct_admin_command(message: dict, admin_id: int, text: str, is_super_admin: bool) -> bool:
+    command = command_name(text)
+    if command not in {"/post", "/broadcast", "/рассылка"}:
+        return False
+
+    reply = message.get("reply_to_message")
+    if not reply:
+        if command == "/post":
+            api.send_message(admin_id, "Для поста ответьте командой /post на сообщение, которое надо отправить всем.")
+        else:
+            api.send_message(admin_id, "Для рассылки ответьте командой /broadcast 5 на сообщение, которое надо отправить всем.")
+        return True
+
+    if command == "/post":
+        sent, failed = send_to_all_users(admin_id, reply["message_id"], repeat=1)
+        api.send_message(admin_id, f"Пост отправлен. Успешно: {sent}, ошибок: {failed}.")
+        return True
+
+    parts = text.strip().split()
+    if len(parts) < 2:
+        api.send_message(admin_id, "Укажите количество повторов. Например: /broadcast 5")
+        return True
+
+    try:
+        repeat = int(parts[1])
+    except ValueError:
+        api.send_message(admin_id, "Количество повторов должно быть числом. Например: /broadcast 5")
+        return True
+
+    if repeat < 1:
+        api.send_message(admin_id, "Количество повторов должно быть 1 или больше.")
+        return True
+
+    if not is_super_admin and repeat > 20:
+        repeat = 20
+        api.send_message(admin_id, "Для обычных админов лимит 20 повторов. Запускаю 20.")
+
+    sent, failed = send_to_all_users(admin_id, reply["message_id"], repeat=repeat)
+    api.send_message(admin_id, f"Рассылка завершена. Успешно: {sent}, ошибок: {failed}. Повторов: {repeat}.")
+    return True
+
+
 def forward_user_message(message: dict, user: UserInfo) -> None:
     for admin_id in db.all_admin_ids():
         try:
@@ -651,9 +698,12 @@ def handle_admin_state(message: dict, admin_id: int, text: str) -> bool:
         try:
             repeat = int(text.strip())
         except ValueError:
-            api.send_message(admin_id, "Отправьте число повторов от 1 до 20 или /cancel.")
+            api.send_message(admin_id, "Отправьте число повторов или /cancel.")
             return True
-        repeat = max(1, min(repeat, 20))
+        repeat = max(1, repeat)
+        if admin_id not in SUPER_ADMINS and repeat > 20:
+            repeat = 20
+            api.send_message(admin_id, "Для обычных админов лимит 20 повторов. Запускаю 20.")
         db.set_state(admin_id, "broadcast_message", str(repeat))
         api.send_message(admin_id, "Теперь отправьте сообщение для рассылки.")
         return True
@@ -715,11 +765,14 @@ def handle_callback(update: dict) -> None:
         db.set_state(chat_id, "unblock")
         api.send_message(chat_id, "Отправьте chat_id пользователя для разблокировки. /cancel для отмены.")
     elif action == "post":
-        db.set_state(chat_id, "post")
-        api.send_message(chat_id, "Отправьте новость одним сообщением. Заголовок обязателен. Можно отправить фото с подписью.")
+        db.clear_state(chat_id)
+        api.send_message(chat_id, "Чтобы пост стабильно отправился: отправьте нужное сообщение в этот чат, потом ответьте на него командой /post.")
     elif action == "broadcast":
-        db.set_state(chat_id, "broadcast_count")
-        api.send_message(chat_id, "Сколько раз отправить рассылку каждому пользователю? Число от 1 до 20.")
+        db.clear_state(chat_id)
+        if chat_id in SUPER_ADMINS:
+            api.send_message(chat_id, "Чтобы сделать рассылку: отправьте нужное сообщение в этот чат, потом ответьте на него командой /broadcast 5. Для супер-админа лимита 20 нет.")
+        else:
+            api.send_message(chat_id, "Чтобы сделать рассылку: отправьте нужное сообщение в этот чат, потом ответьте на него командой /broadcast 5. Лимит для обычного админа: 20.")
 
 
 def handle_message(update: dict) -> None:
@@ -745,10 +798,12 @@ def handle_message(update: dict) -> None:
             return
 
     if db.is_admin(user.chat_id):
-        if reply_to_user_from_owner(message, user.chat_id):
-            return
         if is_admin_command:
             send_admin_panel(user.chat_id)
+            return
+        if handle_direct_admin_command(message, user.chat_id, text, is_super_admin):
+            return
+        if reply_to_user_from_owner(message, user.chat_id):
             return
         if handle_admin_state(message, user.chat_id, text):
             return
