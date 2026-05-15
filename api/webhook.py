@@ -3,6 +3,7 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +31,8 @@ class handler(BaseHTTPRequestHandler):
         secret = os.environ.get("WEBHOOK_SECRET", "")
         if secret:
             actual = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-            if actual != secret:
+            query_secret = parse_qs(urlparse(self.path).query).get("secret", [""])[0]
+            if actual != secret and query_secret != secret:
                 self._send(401, {"ok": False})
                 return
 
