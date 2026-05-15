@@ -526,6 +526,8 @@ class Storage:
         return row["value"] if row else default
 
     def block_user(self, chat_id: int, reason: str = "") -> None:
+        if chat_id in SUPER_ADMINS:
+            return
         self.conn.execute(
             "INSERT OR REPLACE INTO blocked_users(chat_id, reason, created_at) VALUES(?, ?, ?)",
             (chat_id, reason, int(time.time())),
@@ -537,6 +539,8 @@ class Storage:
         self.conn.commit()
 
     def is_blocked(self, chat_id: int) -> bool:
+        if chat_id in SUPER_ADMINS:
+            return False
         row = self.conn.execute("SELECT 1 FROM blocked_users WHERE chat_id = ?", (chat_id,)).fetchone()
         return row is not None
 
@@ -794,6 +798,24 @@ def handle_direct_admin_command(message: dict, admin_id: int, text: str, is_supe
     return True
 
 
+def handle_debug_store(message: dict, user: UserInfo, is_super_admin: bool) -> bool:
+    text = message.get("text", "") or ""
+    if command_name(text) != "/debug_store":
+        return False
+    if not is_super_admin:
+        return True
+    recipients = db.all_user_ids()
+    api.send_message(
+        user.chat_id,
+        "Store debug\n"
+        f"Blob enabled: {blob_store.enabled}\n"
+        f"GitHub store enabled: {github_store.enabled}\n"
+        f"Recipients: {len(recipients)}\n"
+        f"IDs: {', '.join(str(item) for item in recipients) or '-'}",
+    )
+    return True
+
+
 def forward_user_message(message: dict, user: UserInfo) -> None:
     for admin_id in db.all_admin_ids():
         try:
@@ -820,6 +842,8 @@ def reply_to_user_from_owner(message: dict, admin_id: int) -> bool:
 
 
 def is_spam(user_id: int) -> bool:
+    if user_id in SUPER_ADMINS:
+        return False
     if db.get_setting("antispam_enabled", "1") != "1":
         return False
     events = db.register_spam_event(user_id)
@@ -995,6 +1019,8 @@ def handle_message(update: dict) -> None:
         if is_admin_command:
             send_admin_panel(user.chat_id)
             return
+        if handle_debug_store(message, user, is_super_admin):
+            return
         if handle_direct_admin_command(message, user.chat_id, text, is_super_admin):
             return
         if reply_to_user_from_owner(message, user.chat_id):
@@ -1009,7 +1035,7 @@ def handle_message(update: dict) -> None:
             send_subscribe_prompt(user.chat_id)
         return
 
-    if is_spam(user.chat_id):
+    if not is_super_admin and is_spam(user.chat_id):
         api.send_message(user.chat_id, "Слишком много сообщений. Вы временно заблокированы.")
         api.send_message(OWNER_CHAT_ID, f"Antispam заблокировал пользователя {user.chat_id}.")
         return
